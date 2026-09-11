@@ -426,33 +426,37 @@ export function ScopeSection({
 
   return (
     <section className="w-full max-w-md rounded-lg border p-4">
-      <div className="mb-1 flex items-center justify-between">
-        <h2 className="font-medium">
-          {viewMode === "trash" ? `${title} — Кошик` : title}
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <h2 className="flex min-w-0 items-center gap-1.5 font-medium">
+          <span className="truncate">
+            {viewMode === "trash" ? `${title} — Кошик` : title}
+          </span>
+          {viewMode === "files" && (
+            <button
+              onClick={() => setViewMode("trash")}
+              aria-label="Кошик"
+              title="Кошик"
+              className="shrink-0 text-sm text-gray-400 transition hover:text-gray-700"
+            >
+              🗑️
+            </button>
+          )}
         </h2>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
           {viewMode === "files" ? (
             <>
               <button
                 onClick={() => setCreatingFolder((v) => !v)}
-                className="rounded-md border px-3 py-1.5 text-sm transition hover:bg-gray-50"
+                className="whitespace-nowrap rounded-md border px-3 py-1.5 text-sm transition hover:bg-gray-50"
               >
                 New folder
               </button>
               <UploadButton scope={scope} folder={currentPath} label="Upload" onUploaded={load} />
-              <button
-                onClick={() => setViewMode("trash")}
-                aria-label="Кошик"
-                title="Кошик"
-                className="rounded-md border px-2 py-1.5 text-sm transition hover:bg-gray-50"
-              >
-                🗑️
-              </button>
             </>
           ) : (
             <button
               onClick={() => setViewMode("files")}
-              className="rounded-md border px-3 py-1.5 text-sm transition hover:bg-gray-50"
+              className="whitespace-nowrap rounded-md border px-3 py-1.5 text-sm transition hover:bg-gray-50"
             >
               ← Назад
             </button>
@@ -513,7 +517,7 @@ export function ScopeSection({
                         onSort={handleSort}
                       />
                     </th>
-                    <th className="w-16 py-1.5 pr-2 text-right">
+                    <th className="hidden w-16 py-1.5 pr-2 text-right sm:table-cell">
                       <SortHeader
                         label="Розмір"
                         sortKey="size"
@@ -550,7 +554,7 @@ export function ScopeSection({
                           <span className="truncate">{folder}</span>
                         </button>
                       </td>
-                      <td className="py-2 pr-2 text-right text-gray-300">—</td>
+                      <td className="hidden py-2 pr-2 text-right text-gray-300 sm:table-cell">—</td>
                       <td className="py-2 pr-2 text-right text-gray-300">—</td>
                       <td className="py-2">
                         <div className="flex items-center justify-end">
@@ -588,14 +592,14 @@ export function ScopeSection({
                           <span className="truncate">{file.name}</span>
                         </div>
                       </td>
-                      <td className="whitespace-nowrap py-2 pr-2 text-right text-xs text-gray-500">
+                      <td className="hidden whitespace-nowrap py-2 pr-2 text-right text-xs text-gray-500 sm:table-cell">
                         {formatBytes(file.size)}
                       </td>
                       <td className="whitespace-nowrap py-2 pr-2 text-right text-xs text-gray-500">
                         {formatDate(file.lastModified)}
                       </td>
                       <td className="py-2">
-                        <div className="flex items-center justify-end gap-2.5">
+                        <div className="flex flex-nowrap items-center justify-end gap-2">
                           <button
                             onClick={(event) => {
                               event.stopPropagation();

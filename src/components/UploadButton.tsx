@@ -101,7 +101,7 @@ export function UploadButton({
 
   return (
     <div className="flex flex-col items-center gap-1">
-      <label className="cursor-pointer rounded-md border px-4 py-2 text-sm transition hover:bg-gray-50">
+      <label className="cursor-pointer whitespace-nowrap rounded-md border px-3 py-1.5 text-sm transition hover:bg-gray-50">
         {status === "uploading" ? "Uploading…" : label}
         <input
           ref={inputRef}

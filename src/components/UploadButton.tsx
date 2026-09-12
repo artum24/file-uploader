@@ -9,17 +9,58 @@ import {
 
 type Status = "idle" | "uploading" | "done" | "error";
 
+function uploadWithProgress(
+  url: string,
+  file: File,
+  onProgress: (percent: number) => void
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", url);
+    xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) {
+        onProgress(Math.round((event.loaded / event.total) * 100));
+      }
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve();
+        return;
+      }
+      const text = xhr.responseText || "";
+      const code = text.match(/<Code>(.*?)<\/Code>/)?.[1];
+      const message = text.match(/<Message>(.*?)<\/Message>/)?.[1];
+      reject(
+        new Error(
+          `S3 upload failed (${xhr.status}${code ? ` ${code}` : ""}): ${
+            message ?? text.slice(0, 300) ?? "unknown error"
+          }`
+        )
+      );
+    };
+    xhr.onerror = () => reject(new Error("Network error during upload"));
+    xhr.send(file);
+  });
+}
+
 export function UploadButton({
   scope,
   folder,
   label,
+  size = "sm",
   onUploaded,
+  onProgress,
 }: {
   scope: "personal" | "shared";
   /** Current folder path within the scope, e.g. "Documents/2026". Omit for the root. */
   folder?: string;
   label: string;
+  /** "sm" — compact header button. "lg" — larger empty-state button. */
+  size?: "sm" | "lg";
   onUploaded?: () => void;
+  /** Reports upload progress to a parent that wants to render its own indicator. */
+  onProgress?: (state: { name: string; percent: number } | null) => void;
 }) {
   const [status, setStatus] = useState<Status>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -50,6 +91,7 @@ export function UploadButton({
     }
 
     setStatus("uploading");
+    onProgress?.({ name: file.name, percent: 0 });
 
     try {
       const presignRes = await fetch("/api/files/upload-url", {
@@ -71,22 +113,9 @@ export function UploadButton({
 
       const { url } = (await presignRes.json()) as { url: string };
 
-      const putRes = await fetch(url, {
-        method: "PUT",
-        headers: { "Content-Type": file.type || "application/octet-stream" },
-        body: file,
-      });
-
-      if (!putRes.ok) {
-        const text = await putRes.text().catch(() => "");
-        const code = text.match(/<Code>(.*?)<\/Code>/)?.[1];
-        const message = text.match(/<Message>(.*?)<\/Message>/)?.[1];
-        throw new Error(
-          `S3 upload failed (${putRes.status}${code ? ` ${code}` : ""}): ${
-            message ?? text.slice(0, 300) ?? "unknown error"
-          }`
-        );
-      }
+      await uploadWithProgress(url, file, (percent) =>
+        onProgress?.({ name: file.name, percent })
+      );
 
       setStatus("done");
       onUploaded?.();
@@ -95,13 +124,37 @@ export function UploadButton({
       setErrorMessage(error instanceof Error ? error.message : "Upload failed");
       setStatus("error");
     } finally {
+      onProgress?.(null);
       if (inputRef.current) inputRef.current.value = "";
     }
   }
 
+  const sizeClasses =
+    size === "lg"
+      ? "h-12 gap-2 rounded-2xl px-[22px] text-[15.5px] font-semibold"
+      : "h-9 gap-1.5 rounded-[10px] px-3.5 text-[13px] font-semibold";
+
   return (
     <div className="flex flex-col items-center gap-1">
-      <label className="cursor-pointer whitespace-nowrap rounded-md border px-3 py-1.5 text-sm transition hover:bg-gray-50">
+      <label
+        className={`flex cursor-pointer items-center whitespace-nowrap bg-sage-600 text-white shadow-button transition hover:bg-sage-700 ${sizeClasses} ${
+          status === "uploading" ? "opacity-60" : ""
+        }`}
+      >
+        <svg
+          width={size === "lg" ? 18 : 15}
+          height={size === "lg" ? 18 : 15}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          className="shrink-0"
+        >
+          <path d="M12 16V4" />
+          <path d="M7 9l5-5 5 5" />
+          <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
+        </svg>
         {status === "uploading" ? "Uploading…" : label}
         <input
           ref={inputRef}
@@ -111,11 +164,9 @@ export function UploadButton({
           disabled={status === "uploading"}
         />
       </label>
-      {status === "done" && (
-        <span className="text-xs text-green-600">Uploaded</span>
-      )}
+      {status === "done" && <span className="text-xs text-green-600">Uploaded</span>}
       {status === "error" && (
-        <span className="max-w-[16rem] break-words text-center text-xs text-red-600">
+        <span className="max-w-[16rem] break-words text-center text-xs text-brick-600">
           {errorMessage}
         </span>
       )}

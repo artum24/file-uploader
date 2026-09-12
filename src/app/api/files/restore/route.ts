@@ -53,7 +53,7 @@ export async function POST(request: Request) {
       const destKey = `${prefix}${originalPath}`;
       if (await objectExists(destKey)) {
         return NextResponse.json(
-          { error: "У цьому місці вже є файл з такою назвою" },
+          { error: "A file with this name already exists here" },
           { status: 409 }
         );
       }
@@ -63,7 +63,7 @@ export async function POST(request: Request) {
       const destPrefix = `${prefix}${originalPath}/`;
       if (await prefixHasObjects(destPrefix)) {
         return NextResponse.json(
-          { error: "У цьому місці вже є папка з такою назвою" },
+          { error: "A folder with this name already exists here" },
           { status: 409 }
         );
       }

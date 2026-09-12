@@ -8,9 +8,9 @@ export interface ShareTarget {
 }
 
 const DURATION_OPTIONS: { label: string; seconds: number }[] = [
-  { label: "1 година", seconds: 60 * 60 },
-  { label: "1 день", seconds: 24 * 60 * 60 },
-  { label: "7 днів", seconds: 7 * 24 * 60 * 60 },
+  { label: "1 hour", seconds: 60 * 60 },
+  { label: "1 day", seconds: 24 * 60 * 60 },
+  { label: "7 days", seconds: 7 * 24 * 60 * 60 },
 ];
 
 export function ShareModal({
@@ -63,7 +63,7 @@ export function ShareModal({
       await navigator.clipboard.writeText(url);
       setCopied(true);
     } catch {
-      setError("Не вдалося скопіювати — виділіть посилання вручну");
+      setError("Couldn't copy — select the link manually");
     }
   }
 
@@ -76,22 +76,29 @@ export function ShareModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      className="fixed inset-0 z-50 flex items-end justify-center bg-black/35 sm:items-center sm:p-4"
       onClick={handleClose}
     >
       <div
         role="dialog"
         aria-modal="true"
-        className="w-full max-w-sm rounded-lg bg-white p-5 shadow-xl"
+        className="w-full max-w-sm rounded-t-[26px] bg-white px-5 pb-7 pt-2.5 shadow-sheet sm:rounded-[24px] sm:pb-6 sm:pt-6 sm:shadow-overlay"
+        style={{ paddingBottom: "max(1.75rem, env(safe-area-inset-bottom))" }}
         onClick={(event) => event.stopPropagation()}
       >
-        <h3 className="text-base font-semibold text-gray-900">Поділитись &quot;{file.name}&quot;</h3>
-        <p className="mt-1 text-sm text-gray-500">
-          Посилання дозволяє відкрити файл без входу в акаунт і саме стає недійсним
-          після завершення терміну.
+        <div className="mx-auto mb-4 h-1 w-[38px] rounded-full bg-sand-200 sm:hidden" />
+
+        <h3 className="text-[19px] font-semibold tracking-tight text-sand-900">Share link</h3>
+        <p className="mt-1.5 text-[13.5px] leading-relaxed text-sand-500">
+          Anyone with this link can open{" "}
+          <strong className="font-semibold text-sand-800">{file.name}</strong> without signing in.
+          It stops working when it expires.
         </p>
 
-        <div className="mt-3 flex gap-2">
+        <div className="mb-2 mt-[18px] text-[12px] font-semibold uppercase tracking-wide text-sand-400">
+          Expires in
+        </div>
+        <div className="grid grid-cols-3 gap-2">
           {DURATION_OPTIONS.map((option) => (
             <button
               key={option.seconds}
@@ -100,10 +107,10 @@ export function ShareModal({
                 setSeconds(option.seconds);
                 reset();
               }}
-              className={`flex-1 rounded-md border px-2 py-1.5 text-sm transition ${
+              className={`grid h-[46px] place-items-center rounded-[14px] border text-[14.5px] transition ${
                 seconds === option.seconds
-                  ? "border-black bg-black text-white"
-                  : "hover:bg-gray-50"
+                  ? "border-sage-600 bg-sage-600 font-semibold text-white"
+                  : "border-sand-200 text-sand-700 hover:bg-sand-50"
               }`}
             >
               {option.label}
@@ -111,53 +118,65 @@ export function ShareModal({
           ))}
         </div>
 
+        {error && <p className="mt-3 text-sm text-brick-600">{error}</p>}
+
         {!url && (
           <button
             type="button"
             onClick={handleGenerate}
             disabled={busy}
-            className="mt-4 w-full rounded-md bg-black px-3 py-1.5 text-sm text-white transition hover:bg-gray-800 disabled:opacity-50"
+            className="mt-[18px] h-[52px] w-full rounded-2xl bg-sage-600 text-[16px] font-semibold text-white shadow-button transition hover:bg-sage-700 disabled:opacity-50"
           >
-            {busy ? "…" : "Створити посилання"}
+            {busy ? "…" : "Create link"}
           </button>
         )}
 
-        {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
-
         {url && (
-          <div className="mt-4">
-            <div className="flex gap-2">
-              <input
-                readOnly
-                value={url}
-                onFocus={(event) => event.target.select()}
-                className="min-w-0 flex-1 rounded-md border bg-gray-50 px-2 py-1 text-xs text-gray-700"
-              />
+          <>
+            <div className="mt-[18px] flex flex-col gap-2.5 rounded-2xl border border-sand-100 bg-sand-50 p-3.5">
+              <div className="break-all text-[12.5px] leading-snug text-sand-600">{url}</div>
+              {expiresAt && (
+                <div className="flex items-center gap-2 text-[12px] text-sand-400">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round">
+                    <circle cx="12" cy="12" r="9" />
+                    <path d="M12 7v5l3 2" />
+                  </svg>
+                  Valid until {new Date(expiresAt).toLocaleString("en-GB")}
+                </div>
+              )}
+            </div>
+
+            <div className="mt-[18px] flex gap-2.5">
               <button
                 type="button"
                 onClick={handleCopy}
-                className="shrink-0 rounded-md border px-3 py-1 text-sm transition hover:bg-gray-50"
+                className="flex h-[52px] flex-1 items-center justify-center gap-2 rounded-2xl bg-sage-600 text-[16px] font-semibold text-white shadow-button transition hover:bg-sage-700"
               >
-                {copied ? "Скопійовано" : "Копіювати"}
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M20 6 9 17l-5-5" />
+                </svg>
+                {copied ? "Copied" : "Copy link"}
+              </button>
+              <button
+                type="button"
+                onClick={handleClose}
+                className="h-[52px] w-24 rounded-2xl border border-sand-200 text-[15px] font-medium text-sand-700 transition hover:bg-sand-50"
+              >
+                Close
               </button>
             </div>
-            {expiresAt && (
-              <p className="mt-2 text-xs text-gray-400">
-                Діє до {new Date(expiresAt).toLocaleString("uk-UA")}
-              </p>
-            )}
-          </div>
+          </>
         )}
 
-        <div className="mt-5 flex justify-end">
+        {!url && (
           <button
             type="button"
             onClick={handleClose}
-            className="rounded-md border px-3 py-1.5 text-sm transition hover:bg-gray-50"
+            className="mt-3 flex h-11 w-full items-center justify-center text-[14px] font-medium text-sand-500 transition hover:text-sand-700"
           >
-            Закрити
+            Close
           </button>
-        </div>
+        )}
       </div>
     </div>
   );

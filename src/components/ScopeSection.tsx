@@ -20,6 +20,11 @@ interface FileEntry {
   thumbnailUrl: string | null;
 }
 
+/** A search hit — same shape as a normal file entry, plus where it lives. */
+interface SearchFileEntry extends FileEntry {
+  path: string;
+}
+
 interface TrashFileEntry {
   id: string;
   type: "file";
@@ -41,7 +46,7 @@ type TrashEntry = TrashFileEntry | TrashFolderEntry;
 
 type SortKey = "name" | "size" | "date";
 type SortDir = "asc" | "desc";
-type ViewMode = "files" | "trash";
+type ViewMode = "files" | "trash" | "search";
 
 const SORT_LABEL: Record<SortKey, string> = {
   name: "name",
@@ -56,9 +61,15 @@ const SORT_LABEL: Record<SortKey, string> = {
 // Tailwind breakpoint used for the row grid below.
 const DESKTOP_BREAKPOINT_PX = 1024;
 
+const SEARCH_DEBOUNCE_MS = 300;
+
 function folderOf(path: string): string {
   const idx = path.lastIndexOf("/");
   return idx === -1 ? "" : path.slice(0, idx + 1);
+}
+
+function pathLabelFor(path: string): string {
+  return path ? `Home / ${path.split("/").join(" / ")}` : "Home";
 }
 
 function isSameDay(a: Date, b: Date): boolean {
@@ -219,7 +230,15 @@ export function ScopeSection({
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [preview, setPreview] = useState<PreviewTarget | null>(null);
   const [shareTarget, setShareTarget] = useState<ShareTarget | null>(null);
-  const [actionSheetFile, setActionSheetFile] = useState<FileEntry | null>(null);
+
+  // The file an ActionSheet/RowMenu action was triggered from, plus the
+  // folder it actually lives in — not always `currentPath`, since the file
+  // may have been found via search.
+  const [actionSheetTarget, setActionSheetTarget] = useState<{
+    file: FileEntry;
+    parentPath: string;
+  } | null>(null);
+
   const [renameTarget, setRenameTarget] = useState<FileEntry | null>(null);
   const [renameBusy, setRenameBusy] = useState(false);
   const [renameError, setRenameError] = useState<string | null>(null);
@@ -234,6 +253,11 @@ export function ScopeSection({
   const [trashFiles, setTrashFiles] = useState<TrashFileEntry[] | null>(null);
   const [trashFolders, setTrashFolders] = useState<TrashFolderEntry[] | null>(null);
   const [pendingPurge, setPendingPurge] = useState<TrashEntry | null>(null);
+
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<SearchFileEntry[] | null>(null);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -272,6 +296,42 @@ export function ScopeSection({
     }
   }, [scope]);
 
+  const runSearch = useCallback(
+    async (query: string) => {
+      const trimmed = query.trim();
+      if (!trimmed) {
+        setSearchResults(null);
+        setSearchLoading(false);
+        setSearchError(null);
+        return;
+      }
+      setSearchLoading(true);
+      setSearchError(null);
+      try {
+        const res = await fetch(
+          `/api/files/search?scope=${scope}&q=${encodeURIComponent(trimmed)}`
+        );
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.error ?? "Could not search files");
+        }
+        const data = (await res.json()) as { files: SearchFileEntry[] };
+        setSearchResults(data.files);
+      } catch (err) {
+        setSearchResults(null);
+        setSearchError(err instanceof Error ? err.message : "Could not search files");
+      } finally {
+        setSearchLoading(false);
+      }
+    },
+    [scope]
+  );
+
+  const refreshCurrentView = useCallback(async () => {
+    if (viewMode === "search") await runSearch(searchQuery);
+    else await load();
+  }, [viewMode, runSearch, searchQuery, load]);
+
   useEffect(() => {
     if (viewMode !== "files") return;
     setFiles(null);
@@ -285,6 +345,12 @@ export function ScopeSection({
     setTrashFolders(null);
     loadTrash();
   }, [loadTrash, viewMode]);
+
+  useEffect(() => {
+    if (viewMode !== "search") return;
+    const id = setTimeout(() => runSearch(searchQuery), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(id);
+  }, [viewMode, searchQuery, runSearch]);
 
   function handleSort(key: SortKey) {
     if (key === sortKey) {
@@ -351,7 +417,7 @@ export function ScopeSection({
         throw new Error(body.error ?? "Could not rename file");
       }
       setRenameTarget(null);
-      await load();
+      await refreshCurrentView();
     } catch (err) {
       setRenameError(err instanceof Error ? err.message : "Could not rename file");
     } finally {
@@ -384,7 +450,7 @@ export function ScopeSection({
         );
       }
       setMoveTarget(null);
-      await load();
+      await refreshCurrentView();
     } catch (err) {
       setMoveError(
         err instanceof Error
@@ -423,7 +489,7 @@ export function ScopeSection({
           body.error ?? (pendingDelete.type === "file" ? "Could not delete file" : "Could not delete folder")
         );
       }
-      await load();
+      await refreshCurrentView();
       setPendingDelete(null);
     } catch (err) {
       setError(
@@ -509,6 +575,13 @@ export function ScopeSection({
     }
   }
 
+  function exitSpecialView() {
+    setViewMode("files");
+    setSearchQuery("");
+    setSearchResults(null);
+    setSearchError(null);
+  }
+
   const isLoading = files === null && folders === null && !error && viewMode === "files";
   const isEmpty =
     files !== null && folders !== null && files.length === 0 && folders.length === 0;
@@ -523,15 +596,191 @@ export function ScopeSection({
   const trashHasRows =
     (trashFolders && trashFolders.length > 0) || (trashFiles && trashFiles.length > 0);
 
+  const searchTrimmed = searchQuery.trim();
+  const searchIdle = searchTrimmed === "";
+  const searchEmpty = !searchIdle && !searchLoading && searchResults !== null && searchResults.length === 0;
+  const searchHasResults = searchResults !== null && searchResults.length > 0;
+
   const rowGrid =
     "grid-cols-[40px_minmax(0,1fr)_auto] lg:grid-cols-[40px_minmax(0,1fr)_72px_112px_184px]";
+
+  function renderFileRow(
+    file: FileEntry,
+    opts: { parentPath: string; hasBorder: boolean; pathLabel?: string }
+  ) {
+    const kind = getFileKind(file.name);
+    return (
+      <div
+        key={file.key}
+        onClick={() => {
+          if (typeof window !== "undefined" && window.innerWidth < DESKTOP_BREAKPOINT_PX) {
+            setActionSheetTarget({ file, parentPath: opts.parentPath });
+          } else {
+            handlePreview(file);
+          }
+        }}
+        className={`grid ${rowGrid} min-h-[60px] cursor-pointer items-center gap-3 transition hover:bg-sand-50 ${
+          opts.hasBorder ? "border-t border-sand-100" : ""
+        }`}
+      >
+        {file.thumbnailUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={file.thumbnailUrl}
+            alt=""
+            className="h-10 w-10 shrink-0 rounded-xl object-cover"
+          />
+        ) : (
+          <FileTypeIcon kind={kind} />
+        )}
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <span className="truncate text-[15px] font-medium text-sand-900">{file.name}</span>
+          {opts.pathLabel ? (
+            <span className="truncate text-[12.5px] text-sand-400">{opts.pathLabel}</span>
+          ) : (
+            <span className="truncate text-[12.5px] text-sand-400 lg:hidden">
+              {formatBytes(file.size)} · {formatDate(file.lastModified)}
+            </span>
+          )}
+        </div>
+        <span className="hidden whitespace-nowrap text-right text-[13px] text-sand-500 lg:block">
+          {formatBytes(file.size)}
+        </span>
+        <span className="hidden whitespace-nowrap text-right text-[13px] text-sand-500 lg:block">
+          {formatDate(file.lastModified)}
+        </span>
+        <div className="flex items-center justify-end gap-1">
+          <div className="hidden items-center gap-1 lg:flex">
+            <button
+              onClick={(event) => {
+                event.stopPropagation();
+                handlePreview(file);
+              }}
+              aria-label="Preview"
+              title="Preview"
+              className="grid h-8 w-8 place-items-center rounded-md text-sand-400 transition hover:bg-sand-100 hover:text-sage-700"
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+                <path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+            </button>
+            <button
+              onClick={(event) => {
+                event.stopPropagation();
+                setShareTarget({ key: file.key, name: file.name });
+              }}
+              aria-label="Share"
+              title="Share"
+              className="grid h-8 w-8 place-items-center rounded-md text-sand-400 transition hover:bg-sand-100 hover:text-sage-700"
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+                <path d="M9 17H7A5 5 0 0 1 7 7h2" />
+                <path d="M15 7h2a5 5 0 0 1 0 10h-2" />
+                <path d="M8 12h8" />
+              </svg>
+            </button>
+            <button
+              onClick={(event) => {
+                event.stopPropagation();
+                handleDownload(file.key);
+              }}
+              aria-label="Download"
+              title="Download"
+              className="grid h-8 w-8 place-items-center rounded-md text-sand-400 transition hover:bg-sand-100 hover:text-sage-700"
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+                <path d="M12 4v12" />
+                <path d="M7 11l5 5 5-5" />
+                <path d="M4 20h16" />
+              </svg>
+            </button>
+            <button
+              onClick={(event) => {
+                event.stopPropagation();
+                setPendingDelete({ type: "file", key: file.key, name: file.name });
+              }}
+              disabled={busyKey === file.key}
+              aria-label="Delete"
+              title="Delete"
+              className="grid h-8 w-8 place-items-center rounded-md text-sand-400 transition hover:bg-brick-50 hover:text-brick-600 disabled:opacity-50"
+            >
+              {busyKey === file.key ? (
+                "…"
+              ) : (
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+                  <path d="M3 6h18" />
+                  <path d="M8 6V4h8v2" />
+                  <path d="M19 6l-1 14H6L5 6" />
+                </svg>
+              )}
+            </button>
+            <RowMenu
+              items={[
+                {
+                  label: "Rename",
+                  glyph: (
+                    <>
+                      <path d="M12 20h9" />
+                      <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                    </>
+                  ),
+                  onSelect: () => {
+                    setRenameTarget(file);
+                    setRenameError(null);
+                  },
+                },
+                {
+                  label: "Move to…",
+                  glyph: (
+                    <>
+                      <path d="M20 20a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 4.9A2 2 0 0 0 7.93 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2Z" />
+                      <path d="M8.5 13h6" />
+                      <path d="M12 10l3 3-3 3" />
+                    </>
+                  ),
+                  onSelect: () => {
+                    setMoveTarget({
+                      type: "file",
+                      key: file.key,
+                      name: file.name,
+                      parentPath: opts.parentPath,
+                    });
+                    setMoveError(null);
+                  },
+                },
+              ]}
+            />
+          </div>
+          <button
+            onClick={(event) => {
+              event.stopPropagation();
+              setActionSheetTarget({ file, parentPath: opts.parentPath });
+            }}
+            aria-label="File actions"
+            className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-sand-400 transition hover:bg-sand-100 lg:hidden"
+          >
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor">
+              <circle cx="5" cy="12" r="1.6" />
+              <circle cx="12" cy="12" r="1.6" />
+              <circle cx="19" cy="12" r="1.6" />
+            </svg>
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <section className="w-full rounded-[20px] border border-sand-100 bg-white p-4 shadow-card lg:p-5">
       <div className="mb-3 flex items-center justify-between gap-2">
         <h2 className="flex min-w-0 items-center gap-2">
           <span className="truncate text-[17px] font-semibold tracking-tight text-sand-900">
-            {viewMode === "trash" ? `${title} — Trash` : title}
+            {viewMode === "trash"
+              ? `${title} — Trash`
+              : viewMode === "search"
+              ? `${title} — Search`
+              : title}
           </span>
           {viewMode === "files" && (
             <span className="shrink-0 text-[13px] text-sand-400">
@@ -542,6 +791,12 @@ export function ScopeSection({
         <div className="flex shrink-0 items-center gap-1.5">
           {viewMode === "files" ? (
             <>
+              <IconButton label="Search" onClick={() => setViewMode("search")}>
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+                  <circle cx="11" cy="11" r="7" />
+                  <path d="m21 21-4.3-4.3" />
+                </svg>
+              </IconButton>
               <IconButton label="Trash" onClick={() => setViewMode("trash")}>
                 <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
                   <path d="M3 6h18" />
@@ -570,7 +825,7 @@ export function ScopeSection({
             </>
           ) : (
             <button
-              onClick={() => setViewMode("files")}
+              onClick={exitSpecialView}
               className="whitespace-nowrap rounded-[10px] border border-sand-200 px-3 py-1.5 text-sm text-sand-700 transition hover:bg-sand-50"
             >
               ← Back
@@ -584,6 +839,35 @@ export function ScopeSection({
         <p className="mb-3 text-[13px] text-sand-400">
           Items stay here until you delete them for good.
         </p>
+      )}
+      {viewMode === "search" && (
+        <div className="mb-3 flex h-11 items-center gap-2.5 rounded-xl border-[1.5px] border-sage-600 bg-white px-3">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#9AA097" strokeWidth="1.8" strokeLinecap="round" className="shrink-0">
+            <circle cx="11" cy="11" r="7" />
+            <path d="m21 21-4.3-4.3" />
+          </svg>
+          <input
+            autoFocus
+            type="text"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder={`Search ${title.toLowerCase()}…`}
+            className="min-w-0 flex-1 bg-transparent text-[15px] text-sand-900 outline-none placeholder:text-sand-400"
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery("")}
+              aria-label="Clear search"
+              className="shrink-0 text-sand-400 transition hover:text-sand-600"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <path d="M18 6 6 18" />
+                <path d="M6 6l12 12" />
+              </svg>
+            </button>
+          )}
+        </div>
       )}
 
       {viewMode === "files" && creatingFolder && (
@@ -780,171 +1064,12 @@ export function ScopeSection({
                     </div>
                   </div>
                 ))}
-                {sortedFiles?.map((file, index) => {
-                  const kind = getFileKind(file.name);
-                  const hasBorder = (sortedFolders?.length ?? 0) > 0 || index > 0;
-                  return (
-                    <div
-                      key={file.key}
-                      onClick={() => {
-                        if (
-                          typeof window !== "undefined" &&
-                          window.innerWidth < DESKTOP_BREAKPOINT_PX
-                        ) {
-                          setActionSheetFile(file);
-                        } else {
-                          handlePreview(file);
-                        }
-                      }}
-                      className={`grid ${rowGrid} min-h-[60px] cursor-pointer items-center gap-3 transition hover:bg-sand-50 ${
-                        hasBorder ? "border-t border-sand-100" : ""
-                      }`}
-                    >
-                      {file.thumbnailUrl ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          src={file.thumbnailUrl}
-                          alt=""
-                          className="h-10 w-10 shrink-0 rounded-xl object-cover"
-                        />
-                      ) : (
-                        <FileTypeIcon kind={kind} />
-                      )}
-                      <div className="flex min-w-0 flex-col gap-0.5">
-                        <span className="truncate text-[15px] font-medium text-sand-900">
-                          {file.name}
-                        </span>
-                        <span className="truncate text-[12.5px] text-sand-400 lg:hidden">
-                          {formatBytes(file.size)} · {formatDate(file.lastModified)}
-                        </span>
-                      </div>
-                      <span className="hidden whitespace-nowrap text-right text-[13px] text-sand-500 lg:block">
-                        {formatBytes(file.size)}
-                      </span>
-                      <span className="hidden whitespace-nowrap text-right text-[13px] text-sand-500 lg:block">
-                        {formatDate(file.lastModified)}
-                      </span>
-                      <div className="flex items-center justify-end gap-1">
-                        <div className="hidden items-center gap-1 lg:flex">
-                          <button
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              handlePreview(file);
-                            }}
-                            aria-label="Preview"
-                            title="Preview"
-                            className="grid h-8 w-8 place-items-center rounded-md text-sand-400 transition hover:bg-sand-100 hover:text-sage-700"
-                          >
-                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-                              <path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z" />
-                              <circle cx="12" cy="12" r="3" />
-                            </svg>
-                          </button>
-                          <button
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              setShareTarget({ key: file.key, name: file.name });
-                            }}
-                            aria-label="Share"
-                            title="Share"
-                            className="grid h-8 w-8 place-items-center rounded-md text-sand-400 transition hover:bg-sand-100 hover:text-sage-700"
-                          >
-                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-                              <path d="M9 17H7A5 5 0 0 1 7 7h2" />
-                              <path d="M15 7h2a5 5 0 0 1 0 10h-2" />
-                              <path d="M8 12h8" />
-                            </svg>
-                          </button>
-                          <button
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              handleDownload(file.key);
-                            }}
-                            aria-label="Download"
-                            title="Download"
-                            className="grid h-8 w-8 place-items-center rounded-md text-sand-400 transition hover:bg-sand-100 hover:text-sage-700"
-                          >
-                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-                              <path d="M12 4v12" />
-                              <path d="M7 11l5 5 5-5" />
-                              <path d="M4 20h16" />
-                            </svg>
-                          </button>
-                          <button
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              setPendingDelete({ type: "file", key: file.key, name: file.name });
-                            }}
-                            disabled={busyKey === file.key}
-                            aria-label="Delete"
-                            title="Delete"
-                            className="grid h-8 w-8 place-items-center rounded-md text-sand-400 transition hover:bg-brick-50 hover:text-brick-600 disabled:opacity-50"
-                          >
-                            {busyKey === file.key ? (
-                              "…"
-                            ) : (
-                              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-                                <path d="M3 6h18" />
-                                <path d="M8 6V4h8v2" />
-                                <path d="M19 6l-1 14H6L5 6" />
-                              </svg>
-                            )}
-                          </button>
-                          <RowMenu
-                            items={[
-                              {
-                                label: "Rename",
-                                glyph: (
-                                  <>
-                                    <path d="M12 20h9" />
-                                    <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
-                                  </>
-                                ),
-                                onSelect: () => {
-                                  setRenameTarget(file);
-                                  setRenameError(null);
-                                },
-                              },
-                              {
-                                label: "Move to…",
-                                glyph: (
-                                  <>
-                                    <path d="M20 20a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 4.9A2 2 0 0 0 7.93 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2Z" />
-                                    <path d="M8.5 13h6" />
-                                    <path d="M12 10l3 3-3 3" />
-                                  </>
-                                ),
-                                onSelect: () => {
-                                  setMoveTarget({
-                                    type: "file",
-                                    key: file.key,
-                                    name: file.name,
-                                    parentPath: currentPath,
-                                  });
-                                  setMoveError(null);
-                                },
-                              },
-                            ]}
-                          />
-                        </div>
-                        <button
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            setActionSheetFile(file);
-                          }}
-                          aria-label="File actions"
-                          className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-sand-400 transition hover:bg-sand-100 lg:hidden"
-                        >
-                          <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor">
-                            <circle cx="5" cy="12" r="1.6" />
-                            <circle cx="12" cy="12" r="1.6" />
-                            <circle cx="19" cy="12" r="1.6" />
-                          </svg>
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
+                {sortedFiles?.map((file, index) =>
+                  renderFileRow(file, {
+                    parentPath: currentPath,
+                    hasBorder: (sortedFolders?.length ?? 0) > 0 || index > 0,
+                  })
+                )}
               </div>
 
               <p className="mt-3 text-center text-[12.5px] text-sand-400 lg:hidden">
@@ -953,6 +1078,63 @@ export function ScopeSection({
             </div>
           )}
         </>
+      )}
+
+      {viewMode === "search" && (
+        <div>
+          {searchIdle && (
+            <div className="flex flex-col items-center gap-2 px-4 py-10 text-center">
+              <span className="flex h-16 w-16 items-center justify-center rounded-2xl bg-sand-50 text-sand-400">
+                <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+                  <circle cx="11" cy="11" r="7" />
+                  <path d="m21 21-4.3-4.3" />
+                </svg>
+              </span>
+              <p className="text-[14px] text-sand-400">Type to search files by name</p>
+            </div>
+          )}
+
+          {!searchIdle && searchLoading && (
+            <div className="animate-pulse space-y-0 rounded-2xl border border-sand-100 px-1">
+              {[0, 1, 2].map((i) => (
+                <div
+                  key={i}
+                  className={`flex items-center gap-3 py-3 ${i > 0 ? "border-t border-sand-100" : ""}`}
+                >
+                  <div className="h-10 w-10 shrink-0 rounded-xl bg-sand-100" />
+                  <div className="flex-1 space-y-1.5">
+                    <div className="h-2.5 w-3/5 rounded bg-sand-100" />
+                    <div className="h-2 w-2/5 rounded bg-sand-50" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {!searchIdle && !searchLoading && searchError && (
+            <p className="text-sm text-brick-600">{searchError}</p>
+          )}
+
+          {searchEmpty && (
+            <div className="flex flex-col items-center gap-2 px-4 py-10 text-center">
+              <p className="text-[15px] font-medium text-sand-900">
+                No files match &quot;{searchTrimmed}&quot;
+              </p>
+            </div>
+          )}
+
+          {!searchLoading && searchHasResults && (
+            <div>
+              {searchResults!.map((file, index) =>
+                renderFileRow(file, {
+                  parentPath: file.path,
+                  hasBorder: index > 0,
+                  pathLabel: pathLabelFor(file.path),
+                })
+              )}
+            </div>
+          )}
+        </div>
       )}
 
       {viewMode === "trash" && (
@@ -1145,29 +1327,29 @@ export function ScopeSection({
       />
 
       <ActionSheet
-        open={actionSheetFile !== null}
-        title={actionSheetFile?.name ?? ""}
+        open={actionSheetTarget !== null}
+        title={actionSheetTarget?.file.name ?? ""}
         subtitle={
-          actionSheetFile
-            ? `${formatBytes(actionSheetFile.size)} · ${formatDate(actionSheetFile.lastModified)}`
+          actionSheetTarget
+            ? `${formatBytes(actionSheetTarget.file.size)} · ${formatDate(actionSheetTarget.file.lastModified)}`
             : undefined
         }
-        kind={actionSheetFile ? getFileKind(actionSheetFile.name) : undefined}
-        thumbnailUrl={actionSheetFile?.thumbnailUrl}
-        onClose={() => setActionSheetFile(null)}
+        kind={actionSheetTarget ? getFileKind(actionSheetTarget.file.name) : undefined}
+        thumbnailUrl={actionSheetTarget?.file.thumbnailUrl}
+        onClose={() => setActionSheetTarget(null)}
         options={
-          actionSheetFile
+          actionSheetTarget
             ? [
                 {
                   label: "Preview",
                   icon: "preview",
-                  onSelect: () => handlePreview(actionSheetFile),
+                  onSelect: () => handlePreview(actionSheetTarget.file),
                 },
                 {
                   label: "Rename",
                   icon: "rename",
                   onSelect: () => {
-                    setRenameTarget(actionSheetFile);
+                    setRenameTarget(actionSheetTarget.file);
                     setRenameError(null);
                   },
                 },
@@ -1177,9 +1359,9 @@ export function ScopeSection({
                   onSelect: () => {
                     setMoveTarget({
                       type: "file",
-                      key: actionSheetFile.key,
-                      name: actionSheetFile.name,
-                      parentPath: currentPath,
+                      key: actionSheetTarget.file.key,
+                      name: actionSheetTarget.file.name,
+                      parentPath: actionSheetTarget.parentPath,
                     });
                     setMoveError(null);
                   },
@@ -1188,12 +1370,12 @@ export function ScopeSection({
                   label: "Share",
                   icon: "share",
                   onSelect: () =>
-                    setShareTarget({ key: actionSheetFile.key, name: actionSheetFile.name }),
+                    setShareTarget({ key: actionSheetTarget.file.key, name: actionSheetTarget.file.name }),
                 },
                 {
                   label: "Download",
                   icon: "download",
-                  onSelect: () => handleDownload(actionSheetFile.key),
+                  onSelect: () => handleDownload(actionSheetTarget.file.key),
                 },
                 {
                   label: "Move to trash",
@@ -1202,8 +1384,8 @@ export function ScopeSection({
                   onSelect: () =>
                     setPendingDelete({
                       type: "file",
-                      key: actionSheetFile.key,
-                      name: actionSheetFile.name,
+                      key: actionSheetTarget.file.key,
+                      name: actionSheetTarget.file.name,
                     }),
                 },
               ]

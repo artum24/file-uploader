@@ -213,3 +213,38 @@ export async function listObjects(prefix: string) {
   });
   return s3.send(command);
 }
+
+/**
+ * Lists every object under a prefix, at any depth (no Delimiter), paging
+ * through with ContinuationToken. Used for search, which has to look inside
+ * every subfolder rather than just the current one.
+ */
+export async function listAllObjects(
+  prefix: string
+): Promise<{ key: string; size: number; lastModified: Date | null }[]> {
+  const objects: { key: string; size: number; lastModified: Date | null }[] = [];
+  let continuationToken: string | undefined;
+
+  do {
+    const page = await s3.send(
+      new ListObjectsV2Command({
+        Bucket: BUCKET_NAME,
+        Prefix: prefix,
+        ContinuationToken: continuationToken,
+      })
+    );
+
+    for (const obj of page.Contents ?? []) {
+      if (!obj.Key) continue;
+      objects.push({
+        key: obj.Key,
+        size: obj.Size ?? 0,
+        lastModified: obj.LastModified ?? null,
+      });
+    }
+
+    continuationToken = page.IsTruncated ? page.NextContinuationToken : undefined;
+  } while (continuationToken);
+
+  return objects;
+}

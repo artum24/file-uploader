@@ -2,7 +2,7 @@
 
 import { FileTypeIcon, type FileKind } from "./FileTypeIcon";
 
-type ActionIcon = "preview" | "share" | "download" | "trash";
+type ActionIcon = "preview" | "share" | "download" | "rename" | "move" | "trash";
 
 export interface ActionSheetOption {
   label: string;
@@ -34,6 +34,21 @@ function OptionGlyph({ icon }: { icon: ActionIcon }) {
           <path d="M12 4v12" />
           <path d="M7 11l5 5 5-5" />
           <path d="M4 20h16" />
+        </>
+      );
+    case "rename":
+      return (
+        <>
+          <path d="M12 20h9" />
+          <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+        </>
+      );
+    case "move":
+      return (
+        <>
+          <path d="M20 20a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 4.9A2 2 0 0 0 7.93 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2Z" />
+          <path d="M8.5 13h6" />
+          <path d="M12 10l3 3-3 3" />
         </>
       );
     case "trash":

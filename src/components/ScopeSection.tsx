@@ -6,6 +6,9 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { PreviewModal, type PreviewTarget } from "./PreviewModal";
 import { ShareModal, type ShareTarget } from "./ShareModal";
 import { ActionSheet } from "./ActionSheet";
+import { RenameDialog } from "./RenameDialog";
+import { MoveDialog, type MoveItem } from "./MoveDialog";
+import { RowMenu } from "./RowMenu";
 import { FileTypeIcon, getFileKind } from "./FileTypeIcon";
 import { formatBytes } from "@/lib/upload-limits";
 
@@ -217,6 +220,13 @@ export function ScopeSection({
   const [preview, setPreview] = useState<PreviewTarget | null>(null);
   const [shareTarget, setShareTarget] = useState<ShareTarget | null>(null);
   const [actionSheetFile, setActionSheetFile] = useState<FileEntry | null>(null);
+  const [renameTarget, setRenameTarget] = useState<FileEntry | null>(null);
+  const [renameBusy, setRenameBusy] = useState(false);
+  const [renameError, setRenameError] = useState<string | null>(null);
+
+  const [moveTarget, setMoveTarget] = useState<MoveItem | null>(null);
+  const [moveBusy, setMoveBusy] = useState(false);
+  const [moveError, setMoveError] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState<{ name: string; percent: number } | null>(
     null
   );
@@ -323,6 +333,66 @@ export function ScopeSection({
       link.remove();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not download file");
+    }
+  }
+
+  async function handleRename(newName: string) {
+    if (!renameTarget) return;
+    setRenameBusy(true);
+    setRenameError(null);
+    try {
+      const res = await fetch("/api/files/rename", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key: renameTarget.key, newName }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? "Could not rename file");
+      }
+      setRenameTarget(null);
+      await load();
+    } catch (err) {
+      setRenameError(err instanceof Error ? err.message : "Could not rename file");
+    } finally {
+      setRenameBusy(false);
+    }
+  }
+
+  async function handleMove(destPath: string) {
+    if (!moveTarget) return;
+    setMoveBusy(true);
+    setMoveError(null);
+    try {
+      const body =
+        moveTarget.type === "file"
+          ? { scope, destPath, item: { type: "file", key: moveTarget.key } }
+          : {
+              scope,
+              destPath,
+              item: { type: "folder", path: moveTarget.parentPath, name: moveTarget.name },
+            };
+      const res = await fetch("/api/files/move", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const responseBody = await res.json().catch(() => ({}));
+        throw new Error(
+          responseBody.error ?? `Could not move ${moveTarget.type === "file" ? "file" : "folder"}`
+        );
+      }
+      setMoveTarget(null);
+      await load();
+    } catch (err) {
+      setMoveError(
+        err instanceof Error
+          ? err.message
+          : `Could not move ${moveTarget.type === "file" ? "file" : "folder"}`
+      );
+    } finally {
+      setMoveBusy(false);
     }
   }
 
@@ -454,7 +524,7 @@ export function ScopeSection({
     (trashFolders && trashFolders.length > 0) || (trashFiles && trashFiles.length > 0);
 
   const rowGrid =
-    "grid-cols-[40px_minmax(0,1fr)_auto] lg:grid-cols-[40px_minmax(0,1fr)_72px_112px_160px]";
+    "grid-cols-[40px_minmax(0,1fr)_auto] lg:grid-cols-[40px_minmax(0,1fr)_72px_112px_184px]";
 
   return (
     <section className="w-full rounded-[20px] border border-sand-100 bg-white p-4 shadow-card lg:p-5">
@@ -670,23 +740,38 @@ export function ScopeSection({
                     <span className="hidden text-right text-[13px] text-sand-300 lg:block">—</span>
                     <span className="hidden text-right text-[13px] text-sand-300 lg:block">—</span>
                     <div className="flex items-center justify-end gap-1">
-                      <button
-                        onClick={() => setPendingDelete({ type: "folder", name: folder })}
-                        disabled={busyKey === `folder:${folder}`}
-                        aria-label="Delete folder"
-                        title="Delete folder"
-                        className="hidden h-8 w-8 shrink-0 place-items-center rounded-md text-sand-400 transition hover:bg-brick-50 hover:text-brick-600 disabled:opacity-50 lg:grid"
-                      >
-                        {busyKey === `folder:${folder}` ? (
-                          "…"
-                        ) : (
-                          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
-                            <path d="M3 6h18" />
-                            <path d="M8 6V4h8v2" />
-                            <path d="M19 6l-1 14H6L5 6" />
-                          </svg>
-                        )}
-                      </button>
+                      {busyKey === `folder:${folder}` ? (
+                        <span className="grid h-8 w-8 shrink-0 place-items-center text-sand-400">…</span>
+                      ) : (
+                        <RowMenu
+                          items={[
+                            {
+                              label: "Move to…",
+                              glyph: (
+                                <>
+                                  <path d="M20 20a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 4.9A2 2 0 0 0 7.93 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2Z" />
+                                  <path d="M8.5 13h6" />
+                                  <path d="M12 10l3 3-3 3" />
+                                </>
+                              ),
+                              onSelect: () =>
+                                setMoveTarget({ type: "folder", name: folder, parentPath: currentPath }),
+                            },
+                            {
+                              label: "Delete folder",
+                              danger: true,
+                              glyph: (
+                                <>
+                                  <path d="M3 6h18" />
+                                  <path d="M8 6V4h8v2" />
+                                  <path d="M19 6l-1 14H6L5 6" />
+                                </>
+                              ),
+                              onSelect: () => setPendingDelete({ type: "folder", name: folder }),
+                            },
+                          ]}
+                        />
+                      )}
                       <span className="grid h-8 w-8 shrink-0 place-items-center text-sand-300">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
                           <path d="m9 18 6-6-6-6" />
@@ -805,6 +890,42 @@ export function ScopeSection({
                               </svg>
                             )}
                           </button>
+                          <RowMenu
+                            items={[
+                              {
+                                label: "Rename",
+                                glyph: (
+                                  <>
+                                    <path d="M12 20h9" />
+                                    <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                                  </>
+                                ),
+                                onSelect: () => {
+                                  setRenameTarget(file);
+                                  setRenameError(null);
+                                },
+                              },
+                              {
+                                label: "Move to…",
+                                glyph: (
+                                  <>
+                                    <path d="M20 20a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 4.9A2 2 0 0 0 7.93 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2Z" />
+                                    <path d="M8.5 13h6" />
+                                    <path d="M12 10l3 3-3 3" />
+                                  </>
+                                ),
+                                onSelect: () => {
+                                  setMoveTarget({
+                                    type: "file",
+                                    key: file.key,
+                                    name: file.name,
+                                    parentPath: currentPath,
+                                  });
+                                  setMoveError(null);
+                                },
+                              },
+                            ]}
+                          />
                         </div>
                         <button
                           onClick={(event) => {
@@ -998,6 +1119,31 @@ export function ScopeSection({
 
       <ShareModal file={shareTarget} onClose={() => setShareTarget(null)} />
 
+      <RenameDialog
+        open={renameTarget !== null}
+        currentName={renameTarget?.name ?? ""}
+        busy={renameBusy}
+        error={renameError}
+        onConfirm={handleRename}
+        onCancel={() => {
+          setRenameTarget(null);
+          setRenameError(null);
+        }}
+      />
+
+      <MoveDialog
+        open={moveTarget !== null}
+        scope={scope}
+        item={moveTarget}
+        busy={moveBusy}
+        error={moveError}
+        onConfirm={handleMove}
+        onCancel={() => {
+          setMoveTarget(null);
+          setMoveError(null);
+        }}
+      />
+
       <ActionSheet
         open={actionSheetFile !== null}
         title={actionSheetFile?.name ?? ""}
@@ -1016,6 +1162,27 @@ export function ScopeSection({
                   label: "Preview",
                   icon: "preview",
                   onSelect: () => handlePreview(actionSheetFile),
+                },
+                {
+                  label: "Rename",
+                  icon: "rename",
+                  onSelect: () => {
+                    setRenameTarget(actionSheetFile);
+                    setRenameError(null);
+                  },
+                },
+                {
+                  label: "Move to…",
+                  icon: "move",
+                  onSelect: () => {
+                    setMoveTarget({
+                      type: "file",
+                      key: actionSheetFile.key,
+                      name: actionSheetFile.name,
+                      parentPath: currentPath,
+                    });
+                    setMoveError(null);
+                  },
                 },
                 {
                   label: "Share",

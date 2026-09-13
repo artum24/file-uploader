@@ -164,7 +164,6 @@ export function UploadButton({
           disabled={status === "uploading"}
         />
       </label>
-      {status === "done" && <span className="text-xs text-green-600">Uploaded</span>}
       {status === "error" && (
         <span className="max-w-[16rem] break-words text-center text-xs text-brick-600">
           {errorMessage}

@@ -205,11 +205,16 @@ export async function createFolder(key: string) {
   await s3.send(new PutObjectCommand({ Bucket: BUCKET_NAME, Key: key, Body: "" }));
 }
 
-export async function listObjects(prefix: string) {
+export async function listObjects(
+  prefix: string,
+  options?: { continuationToken?: string; maxKeys?: number }
+) {
   const command = new ListObjectsV2Command({
     Bucket: BUCKET_NAME,
     Prefix: prefix,
     Delimiter: "/",
+    ContinuationToken: options?.continuationToken,
+    MaxKeys: options?.maxKeys,
   });
   return s3.send(command);
 }

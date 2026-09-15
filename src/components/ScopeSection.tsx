@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { UploadButton } from "./UploadButton";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { PreviewModal, type PreviewTarget } from "./PreviewModal";
@@ -215,6 +215,9 @@ export function ScopeSection({
   const [currentPath, setCurrentPath] = useState("");
   const [files, setFiles] = useState<FileEntry[] | null>(null);
   const [folders, setFolders] = useState<string[] | null>(null);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
 
@@ -259,23 +262,44 @@ export function ScopeSection({
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    try {
-      const res = await fetch(
-        `/api/files/list?scope=${scope}&path=${encodeURIComponent(currentPath)}`
-      );
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error ?? "Could not load files");
+  const load = useCallback(
+    async (cursor?: string) => {
+      try {
+        const url = `/api/files/list?scope=${scope}&path=${encodeURIComponent(currentPath)}${
+          cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""
+        }`;
+        const res = await fetch(url);
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.error ?? "Could not load files");
+        }
+        const data = (await res.json()) as {
+          files: FileEntry[];
+          folders: string[];
+          nextCursor: string | null;
+        };
+        if (cursor) {
+          setFiles((prev) => [...(prev ?? []), ...data.files]);
+          setFolders((prev) => [...(prev ?? []), ...data.folders]);
+        } else {
+          setFiles(data.files);
+          setFolders(data.folders);
+        }
+        setNextCursor(data.nextCursor);
+        setError(null);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Could not load files");
       }
-      const data = (await res.json()) as { files: FileEntry[]; folders: string[] };
-      setFiles(data.files);
-      setFolders(data.folders);
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not load files");
-    }
-  }, [scope, currentPath]);
+    },
+    [scope, currentPath]
+  );
+
+  const loadMore = useCallback(async () => {
+    if (!nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    await load(nextCursor);
+    setLoadingMore(false);
+  }, [nextCursor, loadingMore, load]);
 
   const loadTrash = useCallback(async () => {
     try {
@@ -336,8 +360,26 @@ export function ScopeSection({
     if (viewMode !== "files") return;
     setFiles(null);
     setFolders(null);
+    setNextCursor(null);
     load();
   }, [load, viewMode]);
+
+  // Infinite scroll: fetch the next page once the sentinel below the list
+  // scrolls into view, so long folders load incrementally instead of all
+  // at once.
+  useEffect(() => {
+    if (viewMode !== "files" || !nextCursor) return;
+    const node = loadMoreRef.current;
+    if (!node) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) loadMore();
+      },
+      { rootMargin: "200px" }
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [viewMode, nextCursor, loadMore]);
 
   useEffect(() => {
     if (viewMode !== "trash") return;
@@ -1005,25 +1047,24 @@ export function ScopeSection({
                 {sortedFolders?.map((folder, index) => (
                   <div
                     key={`folder-${folder}`}
-                    className={`grid ${rowGrid} min-h-[60px] items-center gap-3 ${
+                    onClick={() =>
+                      setCurrentPath(currentPath ? `${currentPath}/${folder}` : folder)
+                    }
+                    className={`grid ${rowGrid} min-h-[60px] cursor-pointer items-center gap-3 transition hover:bg-sand-50 ${
                       index > 0 ? "border-t border-sand-100" : ""
                     }`}
                   >
                     <FileTypeIcon kind="folder" />
-                    <button
-                      onClick={() =>
-                        setCurrentPath(currentPath ? `${currentPath}/${folder}` : folder)
-                      }
-                      className="flex min-w-0 flex-col items-start gap-0.5 text-left"
-                    >
+                    <div className="flex min-w-0 flex-col items-start gap-0.5 text-left">
                       <span className="truncate text-[15px] font-medium text-sand-900">
                         {folder}
                       </span>
                       <span className="text-[12.5px] text-sand-400 lg:hidden">Folder</span>
-                    </button>
+                    </div>
                     <span className="hidden text-right text-[13px] text-sand-300 lg:block">—</span>
                     <span className="hidden text-right text-[13px] text-sand-300 lg:block">—</span>
                     <div className="flex items-center justify-end gap-1">
+                      {/* RowMenu's own trigger stops propagation, so it won't navigate the row */}
                       {busyKey === `folder:${folder}` ? (
                         <span className="grid h-8 w-8 shrink-0 place-items-center text-sand-400">…</span>
                       ) : (
@@ -1071,6 +1112,27 @@ export function ScopeSection({
                   })
                 )}
               </div>
+
+              {nextCursor && (
+                <div ref={loadMoreRef} className="flex items-center justify-center py-4">
+                  {loadingMore ? (
+                    <span className="flex items-center gap-2 text-[13px] text-sand-400">
+                      <span
+                        className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-sand-200 border-t-sand-400"
+                        aria-hidden
+                      />
+                      Loading more…
+                    </span>
+                  ) : (
+                    <button
+                      onClick={loadMore}
+                      className="text-[13px] font-medium text-sage-600 transition hover:underline"
+                    >
+                      Load more
+                    </button>
+                  )}
+                </div>
+              )}
 
               <p className="mt-3 text-center text-[12.5px] text-sand-400 lg:hidden">
                 Sorted by {SORT_LABEL[sortKey]} · {sortDir === "desc" ? "newest first" : "oldest first"}

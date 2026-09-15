@@ -9,6 +9,9 @@ function isImage(name: string): boolean {
   return IMAGE_EXTENSIONS.includes(ext);
 }
 
+/** How many entries (files + folders combined) a single page returns. */
+const PAGE_SIZE = 40;
+
 export async function GET(request: Request) {
   const session = await auth();
   const email = session?.user?.email;
@@ -19,6 +22,7 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const scope: Scope = searchParams.get("scope") === "shared" ? "shared" : "personal";
   const rawPath = searchParams.get("path") ?? "";
+  const cursor = searchParams.get("cursor") ?? undefined;
 
   let relativePath: string;
   try {
@@ -31,7 +35,7 @@ export async function GET(request: Request) {
   const prefix = `${prefixForScope(scope, email)}${relativePath}`;
 
   try {
-    const result = await listObjects(prefix);
+    const result = await listObjects(prefix, { continuationToken: cursor, maxKeys: PAGE_SIZE });
 
     const rawFiles = (result.Contents ?? [])
       .filter(
@@ -69,7 +73,9 @@ export async function GET(request: Request) {
       .filter((name) => name !== TRASH_DIR)
       .sort((a, b) => a.localeCompare(b));
 
-    return NextResponse.json({ scope, path: relativePath, files, folders });
+    const nextCursor = result.IsTruncated ? result.NextContinuationToken ?? null : null;
+
+    return NextResponse.json({ scope, path: relativePath, files, folders, nextCursor });
   } catch (error) {
     console.error("Failed to list files", error);
     return NextResponse.json({ error: "Could not list files" }, { status: 500 });
